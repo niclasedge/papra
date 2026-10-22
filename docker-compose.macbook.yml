@@ -43,7 +43,9 @@ services:
       INGESTION_FOLDER_ROOT_PATH: /dropbox/ingestion
       # File events from macOS do not reliably reach the Linux VM.
       INGESTION_FOLDER_WATCHER_USE_POLLING: "true"
-      INGESTION_FOLDER_POST_PROCESSING_STRATEGY: move
+      # The archive copy lives in documents/; a moved copy would double the
+      # Dropbox footprint. Mail originals stay in Gmail anyway.
+      INGESTION_FOLDER_POST_PROCESSING_STRATEGY: delete
     volumes:
       - papra-db:/app/app-data
       - /Users/niclasedge/Dropbox/Docs-Private-Papra:/dropbox

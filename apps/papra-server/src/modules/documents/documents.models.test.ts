@@ -3,6 +3,7 @@ import {
   buildOriginalDocumentKey,
   ensureSafeFileName,
   formatDocumentForApi,
+  getDocumentDateFromFileName,
   isDocumentSizeLimitEnabled,
   joinStorageKeyParts,
 } from './documents.models';
@@ -197,6 +198,20 @@ describe('documents models', () => {
       expect(ensureSafeFileName('../..')).to.eql('_');
       expect(ensureSafeFileName('   ')).to.eql('_');
       expect(ensureSafeFileName('...')).to.eql('_');
+    });
+  });
+
+  describe('getDocumentDateFromFileName', () => {
+    test('a leading YYYY-MM-DD is the document date, at local midnight', () => {
+      expect(getDocumentDateFromFileName('2026-10-22 Mail webgo.de - Rechnung.pdf')).to.eql(new Date(2026, 9, 22));
+      expect(getDocumentDateFromFileName('2026-10-22.pdf')).to.eql(new Date(2026, 9, 22));
+    });
+
+    test('no date when the name does not start with a valid date', () => {
+      expect(getDocumentDateFromFileName('Rechnung 2026-10-22.pdf')).to.eql(null);
+      expect(getDocumentDateFromFileName('2026-02-30 scan.pdf')).to.eql(null);
+      expect(getDocumentDateFromFileName('2026-13-01 scan.pdf')).to.eql(null);
+      expect(getDocumentDateFromFileName('2026-10-221.pdf')).to.eql(null);
     });
   });
 });

@@ -65,3 +65,17 @@ export function formatDocumentsForApi<T extends PartialBy<DbSelectableDocument, 
 export function ensureSafeFileName(fileName: string) {
   return filenamify(fileName, { replacement: '_' });
 }
+
+// A leading YYYY-MM-DD in the file name (mail fetcher, scanner apps) is taken as the document date.
+export function getDocumentDateFromFileName(fileName: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?!\d)/.exec(fileName);
+  if (!match) {
+    return null;
+  }
+
+  const [year, month, day] = match.slice(1).map(Number) as [number, number, number];
+  // Local midnight, like the date picker of the client.
+  const date = new Date(year, month - 1, day);
+
+  return date.getMonth() === month - 1 && date.getDate() === day ? date : null;
+}

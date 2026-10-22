@@ -47,6 +47,7 @@ import {
 import {
   formatDocumentForApi,
   generateDocumentId as generateDocumentIdImpl,
+  getDocumentDateFromFileName,
 } from './documents.models';
 import { createDocumentsRepository } from './documents.repository';
 import { buildCreateDocumentStorageKey } from './document-storage.usecases';
@@ -111,10 +112,11 @@ export async function createDocument({
 
   const documentId = generateDocumentId();
   const createdAt = new Date();
+  const documentDate = getDocumentDateFromFileName(fileName);
   const { storageKey } = await createDocumentStorageKey({
     documentId,
     documentName: fileName,
-    documentDate: null,
+    documentDate,
     documentCreatedAt: createdAt,
     organizationId,
   });
@@ -176,6 +178,7 @@ export async function createDocument({
       })
     : await createNewDocument({
         createdAt,
+        documentDate,
         newFileStorageContext: { storageKey, ...encryptionMetadata },
         fileName,
         size,
@@ -322,6 +325,7 @@ async function handleExistingDocument({
 
 async function createNewDocument({
   createdAt,
+  documentDate,
   fileName,
   size,
   mimeType,
@@ -342,6 +346,7 @@ async function createNewDocument({
   logger,
 }: {
   createdAt: Date;
+  documentDate: Date | null;
   fileName: string;
   size: number;
   mimeType: string;
@@ -387,6 +392,7 @@ async function createNewDocument({
     documentsRepository.saveOrganizationDocument({
       id: documentId,
       createdAt,
+      documentDate,
       name: fileName,
       organizationId,
       originalName: fileName,

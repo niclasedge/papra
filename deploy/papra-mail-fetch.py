@@ -2,7 +2,9 @@
 
 Every INTERVAL seconds: each message matching GMAIL_QUERY (default: the label
 `Papra`) that does not yet carry GMAIL_DONE_LABEL has its attachments written
-to /ingestion/<PAPRA_ORG_ID>/, then gets GMAIL_DONE_LABEL added. No label is
+to /ingestion/<PAPRA_ORG_ID>/, then gets GMAIL_DONE_LABEL added. A message
+without attachments (order confirmation, receipt) is written as one .md file
+instead: headers plus body text, which Papra indexes as text. No label is
 removed, so a query on `label:Rechnungen` leaves the tax export
 (~/GITHUB/gmail/export_invoices.py) untouched. A message whose files could not
 be written stays unlabelled and is retried on the next round, so a sleeping Mac
@@ -28,6 +30,7 @@ import re
 import sys
 import time
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -116,6 +119,57 @@ def attachments(msg: email.message.EmailMessage):
             yield filename, payload
 
 
+class HtmlText(HTMLParser):
+    """Visible text of an HTML mail, one line per block element."""
+
+    BLOCK = {"p", "div", "br", "tr", "li", "table", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self.hidden = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.hidden += 1
+        elif tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self.hidden = max(0, self.hidden - 1)
+        elif tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def body_text(msg: email.message.EmailMessage) -> str:
+    part = msg.get_body(preferencelist=("plain", "html"))
+    if part is None:
+        return ""
+    try:
+        text = part.get_content()
+    except (LookupError, ValueError):  # unknown or broken charset
+        text = (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
+    if part.get_content_subtype() == "html":
+        parser = HtmlText()
+        parser.feed(text)
+        text = "".join(parser.parts)
+    # Newsletter templates pad the preview line with invisible joiners.
+    text = re.sub(r"[­͏​-‏⁠﻿]", "", text)
+    lines = (" ".join(line.split()) for line in text.splitlines())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def as_markdown(msg: email.message.EmailMessage) -> str:
+    head = [f"# {msg.get('Subject', '')}", ""]
+    head += [f"- {name}: {msg[header]}" for name, header in (("Von", "From"), ("An", "To"), ("Datum", "Date")) if msg[header]]
+    return "\n".join(head) + "\n\n" + body_text(msg) + "\n"
+
+
 def prefix(msg: email.message.EmailMessage) -> str:
     try:
         day = email.utils.parsedate_to_datetime(msg["Date"]).strftime("%Y-%m-%d")
@@ -158,12 +212,9 @@ def run_once() -> None:
         written = [
             write(target_dir, staging, f"{prefix(msg)} - {filename}", payload)
             for filename, payload in attachments(msg)
-        ]
+        ] or [write(target_dir, staging, f"{prefix(msg)} - {subject or 'Mail'}.md", as_markdown(msg).encode())]
         api(token, "POST", f"messages/{quote(msg_id)}/modify", body={"addLabelIds": [done_id]})
-        if written:
-            log(f"{len(written)} file(s) from {subject!r}: " + ", ".join(p.name for p in written))
-        else:
-            log(f"no attachment in {subject!r}, labelled {DONE_LABEL}")
+        log(f"{len(written)} file(s) from {subject!r}: " + ", ".join(p.name for p in written))
 
 
 def main() -> None:

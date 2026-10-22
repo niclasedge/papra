@@ -177,7 +177,8 @@ def prefix(msg: email.message.EmailMessage) -> str:
         day = datetime.now().strftime("%Y-%m-%d")
     sender = email.utils.parseaddr(str(msg.get("From", "")))[1]
     domain = sender.rpartition("@")[2] or "unbekannt"
-    return f"{day} {domain}"
+    # "Mail" is matched by the Papra tagging rule "Mail" (name contains Mail).
+    return f"{day} Mail {domain}"
 
 
 def unique(path: Path) -> Path:

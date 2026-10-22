@@ -1,0 +1,62 @@
+# Papra on the MacBook, at http://127.0.0.1:1221 and https://docs.lan.niclasedge.com
+# (the Mini's Traefik dials it over the tailnet: IaC-Stack
+# ansible/playbooks/runbooks/vars/traefik_remote_services.yml, entry `docs`).
+# Deployed by IaC-Stack (services.yml: papra, rsync-build, this file).
+# Answers only while the MacBook is awake.
+#
+# Data layout:
+#   papra-db (named volume)   SQLite DB + config at /app/app-data. Deliberately NOT a
+#                             bind mount and NOT in Dropbox: POSIX locks are not shared
+#                             over OrbStack's virtiofs, and a sync client must never see
+#                             a live DB with its -wal/-shm sidecars.
+#   ~/Dropbox/Docs-Private-Papra, mounted at /dropbox
+#     documents/              document files, unencrypted, readable names (key pattern)
+#     ingestion/<org_id>/     watched folder: mail fetcher, Finder, phone
+#     db-backup/              consistent DB snapshot, one file per day, refreshed hourly
+#
+# Secrets: AUTH_SECRET comes from .env, rendered by IaC-Stack (env_from_secrets).
+services:
+  papra:
+    build:
+      context: .
+      dockerfile: packages/app/Dockerfile
+    image: papra:local
+    container_name: papra
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1221:1221"
+    environment:
+      TZ: Europe/Berlin
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET missing, rendered by IaC-Stack env_from_secrets}
+      APP_BASE_URL: https://docs.lan.niclasedge.com
+      TRUSTED_ORIGINS: http://127.0.0.1:1221,http://localhost:1221
+      DOCUMENTS_OCR_LANGUAGES: deu,eng
+      DOCUMENT_STORAGE_FILESYSTEM_ROOT: /dropbox/documents
+      DOCUMENT_STORAGE_USE_LEGACY_STORAGE_KEY_DEFINITION_SYSTEM: "false"
+      DOCUMENT_STORAGE_KEY_PATTERN: "{{organization.name}}/{{currentDate.yyyy}}/{{document.name}}"
+      DOCUMENT_STORAGE_KEY_SYNC_ENABLED: "true"
+      INGESTION_FOLDER_IS_ENABLED: "true"
+      INGESTION_FOLDER_ROOT_PATH: /dropbox/ingestion
+      # File events from macOS do not reliably reach the Linux VM.
+      INGESTION_FOLDER_WATCHER_USE_POLLING: "true"
+      INGESTION_FOLDER_POST_PROCESSING_STRATEGY: move
+    volumes:
+      - papra-db:/app/app-data
+      - /Users/niclasedge/Dropbox/Docs-Private-Papra:/dropbox
+
+  # Hourly `.backup` into Dropbox. Runs in the same Linux VM as papra, so SQLite's
+  # locks and WAL index are shared, unlike a sqlite3 started on the macOS host.
+  papra-db-backup:
+    image: alpine:3.22
+    container_name: papra-db-backup
+    restart: unless-stopped
+    command: ["sh", "/deploy/papra-db-backup.sh"]
+    environment:
+      TZ: Europe/Berlin
+    volumes:
+      - papra-db:/data   # rw: reading a WAL database still writes its -shm index
+      - ./deploy:/deploy:ro
+      - /Users/niclasedge/Dropbox/Docs-Private-Papra/db-backup:/backup
+
+volumes:
+  papra-db:

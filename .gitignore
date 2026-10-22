@@ -24,8 +24,8 @@ logs
 # Local env files
 .env
 .env.*
-!.env.example
-!.env.*.example
+# Fork: the upstream `!.env.example` / `!.env.*.example` negations are removed,
+# IaC-Stack's rsync-build refuses `!` patterns. The example files stay tracked.
 
 .wrangler
 coverage

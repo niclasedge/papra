@@ -1,10 +1,16 @@
-"""Fetch mail attachments from an IMAP folder into Papra's ingestion folder.
+"""Fetch mail attachments from Gmail into Papra's ingestion folder.
 
-Every INTERVAL seconds: each message in IMAP_FOLDER (Gmail: the label `Papra`)
-has its attachments written to /ingestion/<PAPRA_ORG_ID>/, then the message is
-moved to IMAP_DONE_FOLDER (Gmail: label `Papra/Done`). A message whose files
-could not be written stays in IMAP_FOLDER and is retried on the next round, so
-a sleeping Mac loses nothing: the mail simply waits in the mailbox.
+Every INTERVAL seconds: each message matching GMAIL_QUERY (default: the label
+`Papra`) that does not yet carry GMAIL_DONE_LABEL has its attachments written
+to /ingestion/<PAPRA_ORG_ID>/, then gets GMAIL_DONE_LABEL added. No label is
+removed, so a query on `label:Rechnungen` leaves the tax export
+(~/GITHUB/gmail/export_invoices.py) untouched. A message whose files could not
+be written stays unlabelled and is retried on the next round, so a sleeping Mac
+loses nothing.
+
+Uses the Gmail REST API with the OAuth client of ~/GITHUB/gmail (scope
+gmail.modify): no app password, no IMAP. Gmail's IMAP would need the broader
+https://mail.google.com/ scope.
 
 Files are written to /ingestion/.staging first (outside every org folder, so
 Papra ignores it) and renamed into place, so the watcher never sees half a file.
@@ -12,26 +18,34 @@ Papra ignores it) and renamed into place, so the watcher never sees half a file.
 Stdlib only; runs in python:3.13-alpine. Config via environment.
 """
 
+import base64
 import email
 import email.policy
 import email.utils
-import imaplib
+import json
 import os
 import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
 
-HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
-USER = os.environ.get("IMAP_USER", "")
-PASSWORD_ENV = "IMAP_PASSWORD"
-PASSWORD = os.environ.get(PASSWORD_ENV, "")
-FOLDER = os.environ.get("IMAP_FOLDER", "Papra")
-DONE_FOLDER = os.environ.get("IMAP_DONE_FOLDER", "Papra/Done")
+CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID", "")
+SECRET_ENV = "GMAIL_CLIENT_SECRET"
+CLIENT_SECRET = os.environ.get(SECRET_ENV, "")
+REFRESH_ENV = "GMAIL_REFRESH_TOKEN"
+REFRESH_TOKEN = os.environ.get(REFRESH_ENV, "")
+QUERY = os.environ.get("GMAIL_QUERY", "label:Papra")
+DONE_LABEL = os.environ.get("GMAIL_DONE_LABEL", "Papra/Done")
 ORG_ID = os.environ.get("PAPRA_ORG_ID", "")
 INTERVAL = int(os.environ.get("INTERVAL", "300"))
 ROOT = Path(os.environ.get("INGESTION_ROOT", "/ingestion"))
+
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+API = "https://gmail.googleapis.com/gmail/v1/users/me"
+AUTH_SCHEME = "Bearer"
 
 # Calendar invites, signatures and contact cards are never documents.
 SKIP_SUFFIXES = {".ics", ".p7s", ".asc", ".sig", ".vcf"}
@@ -41,8 +55,43 @@ def log(msg: str) -> None:
     print(f"{datetime.now().isoformat(timespec='seconds')} {msg}", flush=True)
 
 
-def quote(folder: str) -> str:
-    return '"' + folder.replace('"', '\\"') + '"'
+def access_token() -> str:
+    body = urlencode({
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "refresh_token": REFRESH_TOKEN,
+        "grant_type": "refresh_token",
+    }).encode()
+    with urlopen(Request(TOKEN_URL, data=body), timeout=30) as resp:
+        return json.load(resp)["access_token"]
+
+
+def api(token: str, method: str, path: str, params: dict | None = None, body: dict | None = None) -> dict:
+    url = f"{API}/{path}" + (f"?{urlencode(params)}" if params else "")
+    headers = {"Authorization": " ".join((AUTH_SCHEME, token)), "Content-Type": "application/json"}
+    data = json.dumps(body).encode() if body is not None else None
+    with urlopen(Request(url, data=data, method=method, headers=headers), timeout=60) as resp:
+        return json.load(resp)
+
+
+def done_label_id(token: str) -> str:
+    for label in api(token, "GET", "labels").get("labels", []):
+        if label["name"] == DONE_LABEL:
+            return label["id"]
+    return api(token, "POST", "labels", body={"name": DONE_LABEL})["id"]
+
+
+def message_ids(token: str) -> list[str]:
+    # Gmail search spells nested labels with dashes: Papra/Done -> papra-done.
+    done = re.sub(r"[/\s]", "-", DONE_LABEL.lower())
+    params = {"q": f"({QUERY}) -label:{done}", "maxResults": 500}
+    ids = []
+    while True:
+        page = api(token, "GET", "messages", params)
+        ids += [m["id"] for m in page.get("messages", [])]
+        if "nextPageToken" not in page:
+            return ids
+        params["pageToken"] = page["nextPageToken"]
 
 
 def safe_name(name: str) -> str:
@@ -100,48 +149,37 @@ def run_once() -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
     staging.mkdir(parents=True, exist_ok=True)
 
-    with imaplib.IMAP4_SSL(HOST) as imap:
-        imap.login(USER, PASSWORD)
-        imap.create(quote(DONE_FOLDER))  # NO when it exists, which is fine
-        status, _ = imap.select(quote(FOLDER))
-        if status != "OK":
-            log(f"folder {FOLDER!r} not found, create the label in the mailbox")
-            return
-        _, data = imap.uid("SEARCH", None, "ALL")
-        uids = data[0].split()
-        for uid in uids:
-            _, fetched = imap.uid("FETCH", uid, "(BODY.PEEK[])")
-            raw = next((item[1] for item in fetched if isinstance(item, tuple)), None)
-            if raw is None:
-                continue
-            msg = email.message_from_bytes(raw, policy=email.policy.default)
-            subject = str(msg.get("Subject", ""))[:80]
-            written = [
-                write(target_dir, staging, f"{prefix(msg)} - {filename}", payload)
-                for filename, payload in attachments(msg)
-            ]
-            status, _ = imap.uid("MOVE", uid, quote(DONE_FOLDER))
-            if status != "OK":
-                log(f"move failed for {subject!r}, files already written: {len(written)}")
-                continue
-            if written:
-                log(f"{len(written)} file(s) from {subject!r}: " + ", ".join(p.name for p in written))
-            else:
-                log(f"no attachment in {subject!r}, moved to {DONE_FOLDER}")
+    token = access_token()
+    done_id = done_label_id(token)
+    for msg_id in message_ids(token):
+        raw = api(token, "GET", f"messages/{quote(msg_id)}", {"format": "raw"})["raw"]
+        msg = email.message_from_bytes(base64.urlsafe_b64decode(raw), policy=email.policy.default)
+        subject = str(msg.get("Subject", ""))[:80]
+        written = [
+            write(target_dir, staging, f"{prefix(msg)} - {filename}", payload)
+            for filename, payload in attachments(msg)
+        ]
+        api(token, "POST", f"messages/{quote(msg_id)}/modify", body={"addLabelIds": [done_id]})
+        if written:
+            log(f"{len(written)} file(s) from {subject!r}: " + ", ".join(p.name for p in written))
+        else:
+            log(f"no attachment in {subject!r}, labelled {DONE_LABEL}")
 
 
 def main() -> None:
-    missing = [k for k, v in {"IMAP_USER": USER, "IMAP_PASSWORD": PASSWORD, "PAPRA_ORG_ID": ORG_ID}.items() if not v]
+    config = {"GMAIL_CLIENT_ID": CLIENT_ID, SECRET_ENV: CLIENT_SECRET, REFRESH_ENV: REFRESH_TOKEN, "PAPRA_ORG_ID": ORG_ID}
+    missing = [k for k, v in config.items() if not v]
     if missing:
         log(f"idle: {', '.join(missing)} not set")
         while True:
             time.sleep(3600)
-    log(f"fetching {USER} {FOLDER!r} -> {ROOT / ORG_ID} every {INTERVAL}s")
+    log(f"fetching {QUERY!r} -> {ROOT / ORG_ID} every {INTERVAL}s")
     while True:
         try:
             run_once()
-        except (OSError, imaplib.IMAP4.error) as exc:
+        except (OSError, KeyError, ValueError) as exc:
             # Offline after sleep, Gmail hiccup: the mail stays put, next round retries.
+            # urllib's HTTPError/URLError are OSErrors.
             log(f"round failed: {exc}")
         sys.stdout.flush()
         time.sleep(INTERVAL)

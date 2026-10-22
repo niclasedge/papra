@@ -14,8 +14,9 @@
 #     ingestion/<org_id>/     watched folder: mail fetcher, Finder, phone
 #     db-backup/              consistent DB snapshot, one file per day, refreshed hourly
 #
-# Secrets: AUTH_SECRET (papra) and IMAP_USER, IMAP_PASSWORD, PAPRA_ORG_ID
-# (papra-mail-fetch) come from .env, rendered by IaC-Stack (env_from_secrets).
+# Secrets: AUTH_SECRET (papra) and GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET,
+# GMAIL_REFRESH_TOKEN, PAPRA_ORG_ID (papra-mail-fetch) come from .env, rendered
+# by IaC-Stack (env_from_secrets).
 services:
   papra:
     build:
@@ -61,8 +62,9 @@ services:
       - ./deploy:/deploy:ro
       - /Users/niclasedge/Dropbox/Docs-Private-Papra/db-backup:/backup
 
-  # Gmail label `Papra` -> /ingestion/<org_id>/, then label `Papra/Done`.
-  # Idles until IMAP_USER, IMAP_PASSWORD and PAPRA_ORG_ID are in .env.
+  # Gmail label `Papra` -> /ingestion/<org_id>/, then label `Papra/Done`
+  # (Gmail REST API, OAuth client of ~/GITHUB/gmail). Idles until GMAIL_CLIENT_ID,
+  # GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN and PAPRA_ORG_ID are in .env.
   papra-mail-fetch:
     image: python:3.13-alpine
     container_name: papra-mail-fetch
@@ -71,7 +73,6 @@ services:
     env_file: .env
     environment:
       TZ: Europe/Berlin
-      IMAP_HOST: imap.gmail.com
     volumes:
       - ./deploy:/deploy:ro
       - /Users/niclasedge/Dropbox/Docs-Private-Papra/ingestion:/ingestion

@@ -77,8 +77,14 @@ services:
       TZ: Europe/Berlin
       # Label `Rechnungen` is set daily by ~/GITHUB/gmail/tagger.py --apply
       # (LaunchAgent com.niclasedge.gmail-tagger). Older invoices stay out on
-      # purpose: only mails from the day the automatic import started.
-      GMAIL_QUERY: "label:Papra OR (label:Rechnungen after:2026/10/21)"
+      # purpose: only mails from the day the automatic import started. The tagger
+      # labels by sender, so newsletters of invoice senders (Thalia, netcup) carry
+      # the label too; the subject filter keeps them out.
+      GMAIL_QUERY: >-
+        label:Papra OR (label:Rechnungen after:2026/10/21
+        subject:(Rechnung OR Rechnungen OR Invoice OR Receipt OR Beleg OR Quittung
+        OR Bestellung OR Bestellbestätigung OR Zahlung OR Zahlungsbestätigung
+        OR Order OR Payment OR Abrechnung OR Auszahlung OR Gutschrift OR Einkauf))
     volumes:
       - ./deploy:/deploy:ro
       - /Users/niclasedge/Dropbox/Docs-Private-Papra/ingestion:/ingestion

@@ -31,6 +31,8 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET missing, rendered by IaC-Stack env_from_secrets}
       APP_BASE_URL: https://docs.lan.niclasedge.com
       TRUSTED_ORIGINS: http://127.0.0.1:1221,http://localhost:1221
+      # Closed after the first (admin) account was created on 2026-10-22.
+      AUTH_IS_REGISTRATION_ENABLED: "false"
       DOCUMENTS_OCR_LANGUAGES: deu,eng
       DOCUMENT_STORAGE_FILESYSTEM_ROOT: /dropbox/documents
       DOCUMENT_STORAGE_USE_LEGACY_STORAGE_KEY_DEFINITION_SYSTEM: "false"

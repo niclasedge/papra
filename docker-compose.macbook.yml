@@ -75,6 +75,10 @@ services:
     env_file: .env
     environment:
       TZ: Europe/Berlin
+      # Label `Rechnungen` is set daily by ~/GITHUB/gmail/tagger.py --apply
+      # (LaunchAgent com.niclasedge.gmail-tagger). Older invoices stay out on
+      # purpose: only mails from the day the automatic import started.
+      GMAIL_QUERY: "label:Papra OR (label:Rechnungen after:2026/10/21)"
     volumes:
       - ./deploy:/deploy:ro
       - /Users/niclasedge/Dropbox/Docs-Private-Papra/ingestion:/ingestion

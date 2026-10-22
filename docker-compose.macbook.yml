@@ -14,7 +14,8 @@
 #     ingestion/<org_id>/     watched folder: mail fetcher, Finder, phone
 #     db-backup/              consistent DB snapshot, one file per day, refreshed hourly
 #
-# Secrets: AUTH_SECRET comes from .env, rendered by IaC-Stack (env_from_secrets).
+# Secrets: AUTH_SECRET (papra) and IMAP_USER, IMAP_PASSWORD, PAPRA_ORG_ID
+# (papra-mail-fetch) come from .env, rendered by IaC-Stack (env_from_secrets).
 services:
   papra:
     build:
@@ -57,6 +58,21 @@ services:
       - papra-db:/data   # rw: reading a WAL database still writes its -shm index
       - ./deploy:/deploy:ro
       - /Users/niclasedge/Dropbox/Docs-Private-Papra/db-backup:/backup
+
+  # Gmail label `Papra` -> /ingestion/<org_id>/, then label `Papra/Done`.
+  # Idles until IMAP_USER, IMAP_PASSWORD and PAPRA_ORG_ID are in .env.
+  papra-mail-fetch:
+    image: python:3.13-alpine
+    container_name: papra-mail-fetch
+    restart: unless-stopped
+    command: ["python", "-u", "/deploy/papra-mail-fetch.py"]
+    env_file: .env
+    environment:
+      TZ: Europe/Berlin
+      IMAP_HOST: imap.gmail.com
+    volumes:
+      - ./deploy:/deploy:ro
+      - /Users/niclasedge/Dropbox/Docs-Private-Papra/ingestion:/ingestion
 
 volumes:
   papra-db:
